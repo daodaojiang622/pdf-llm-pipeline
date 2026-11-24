@@ -15,6 +15,29 @@ if not os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
 GROK_API_URL = os.environ.get("GROK_API_URL", "https://api.x.ai/v1/chat/completions")
 GROK_API_KEY = os.environ.get("GROK_API_KEY")
 
+
+class SummaryError(Exception):
+    """The summary could not be generated."""
+
+
+def _mock_summary_allowed():
+    """Placeholder summaries are for local development only.
+
+    ALLOW_MOCK_SUMMARY overrides the default, which is on locally and off on Lambda.
+    """
+    value = os.environ.get("ALLOW_MOCK_SUMMARY")
+    if value is None:
+        return not os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    return value.lower() == "true"
+
+
+def _fallback_or_raise(text, reason):
+    """Return a placeholder summary if allowed, otherwise fail the job."""
+    if _mock_summary_allowed():
+        logger.warning(f"{reason}; returning a placeholder summary")
+        return _generate_mock_summary(text)
+    raise SummaryError(reason)
+
 def generate_summary(text: str):
     """
     Generate a summary using Grok X API
@@ -32,8 +55,7 @@ def generate_summary(text: str):
         text = text[:max_chars] + "..."
     
     if not GROK_API_KEY:
-        logger.warning("Grok X API key not configured")
-        return _generate_mock_summary(text)
+        return _fallback_or_raise(text, "Grok X API key not configured")
     
     try:
         headers = {
@@ -77,32 +99,34 @@ def generate_summary(text: str):
         )
         
         if not summary:
-            logger.warning("No summary content found in API response")
-            return _generate_mock_summary(text)
+            return _fallback_or_raise(text, "No summary content found in API response")
         
         logger.info("Successfully generated summary")
         return summary
     
+    except SummaryError:
+        raise
+
     except requests.exceptions.HTTPError as e:
         logger.error(f"HTTP Error: {e}")
-        logger.error(f"Response: {e.response.text if hasattr(e, 'response') else 'No response'}")
-        return _generate_mock_summary(text)
+        logger.error(f"Response: {e.response.text if e.response is not None else 'No response'}")
+        return _fallback_or_raise(text, f"Grok API returned an error: {e}")
     
     except requests.exceptions.ConnectionError as e:
         logger.error(f"Connection Error: {e}")
-        return _generate_mock_summary(text)
+        return _fallback_or_raise(text, "Could not connect to the Grok API")
     
     except requests.exceptions.Timeout as e:
         logger.error(f"Timeout Error: {e}")
-        return _generate_mock_summary(text)
+        return _fallback_or_raise(text, "Grok API request timed out")
     
     except requests.exceptions.RequestException as e:
         logger.error(f"Request Exception: {e}")
-        return _generate_mock_summary(text)
+        return _fallback_or_raise(text, f"Grok API request failed: {type(e).__name__}")
     
     except Exception as e:
         logger.error(f"Error generating summary: {e}")
-        return _generate_mock_summary(text)
+        return _fallback_or_raise(text, f"Error generating summary: {type(e).__name__}")
 
 def _generate_mock_summary(text):
     """

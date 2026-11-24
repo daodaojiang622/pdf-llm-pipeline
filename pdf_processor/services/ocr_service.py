@@ -9,13 +9,34 @@ from magic_pdf.data.dataset import PymuDocDataset
 from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
 from magic_pdf.config.enums import SupportedPdfParseMethod
 
+# Less text than this means nothing useful was extracted, e.g. a scan without OCR
+MIN_EXTRACTED_CHARS = 20
+
+
+class ExtractionError(Exception):
+    """The PDF could not be read or contained no extractable text."""
+
+
 def extract_text_from_pdf(pdf_path):
     """
+    Extract text from a PDF, raising ExtractionError instead of returning
+    empty or placeholder text, so the job is marked failed.
+    """
+    text = _extract_text(pdf_path)
+    if len(text.strip()) < MIN_EXTRACTED_CHARS:
+        raise ExtractionError(
+            "No extractable text found. The PDF may be scanned and OCR is unavailable."
+        )
+    return text
+
+
+def _extract_text(pdf_path):
+    """
     Extract text from PDF using MinerU OCR technology and save JSON results to output/{document_id}/ directory
-    
+
     Args:
         pdf_path (str): Path to the PDF file (can be S3 URI or local path)
-        
+
     Returns:
         str: Extracted text from the PDF
     """
@@ -188,4 +209,4 @@ def _fallback_text_extraction(pdf_path):
             return extracted_text.strip()
     except Exception as e:
         print(f"Fallback extraction also failed: {e}")
-        return "Error: Unable to extract text from the PDF document."
+        raise ExtractionError(f"Could not read the PDF: {e}") from e
