@@ -9,7 +9,8 @@ Globals:
     MemorySize: 1024
     Environment:
       Variables:
-        PDF_BUCKET: !Ref PDFBucket
+        # Use the name, not !Ref, to avoid a cycle with the S3 trigger
+        PDF_BUCKET: !Sub ${AWS::StackName}-pdfs-${AWS::AccountId}
         TEXT_BUCKET: !Ref TextBucket
         SUMMARY_BUCKET: !Ref SummaryBucket
         JOBS_TABLE: !Ref JobsTable
@@ -33,7 +34,7 @@ Parameters:
   SecretKey:
     Type: String
     NoEcho: true
-    Default: !Sub '${AWS::StackName}-secret-key-${AWS::AccountId}'
+    MinLength: 16
     Description: Secret key for the application
 
   WebhookSecret:
@@ -59,9 +60,9 @@ Resources:
         - x86_64
       Policies:
         - S3ReadPolicy:
-            BucketName: !Ref PDFBucket
+            BucketName: !Sub ${AWS::StackName}-pdfs-${AWS::AccountId}
         - S3WritePolicy:
-            BucketName: !Ref PDFBucket
+            BucketName: !Sub ${AWS::StackName}-pdfs-${AWS::AccountId}
         - S3ReadPolicy:
             BucketName: !Ref TextBucket
         - S3WritePolicy:
@@ -72,14 +73,40 @@ Resources:
             BucketName: !Ref SummaryBucket
         - DynamoDBCrudPolicy:
             TableName: !Ref JobsTable
-      # Keep the Events section the same as before
+      # A failed job is final, so document.failed is never followed by a retry
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
       Events:
         ApiUpload:
           Type: HttpApi
           Properties:
+            ApiId: !Ref PDFProcessorApi
             Path: /upload
             Method: post
-        # ... other events remain the same
+        ApiStatus:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PDFProcessorApi
+            Path: /status/{id}
+            Method: get
+        ApiSummary:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PDFProcessorApi
+            Path: /summary/{id}
+            Method: get
+        PdfUploaded:
+          Type: S3
+          Properties:
+            Bucket: !Ref PDFBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .pdf
     Metadata:
       Dockerfile: Dockerfile
       DockerContext: .

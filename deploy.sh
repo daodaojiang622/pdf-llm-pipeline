@@ -11,6 +11,7 @@ STATIC_BUCKET=${STATIC_BUCKET:-}  # Bucket for static assets
 CLOUDFRONT_DOMAIN=${CLOUDFRONT_DOMAIN:-}  # CloudFront domain (if any)
 GROK_API_KEY=${GROK_API_KEY:-}  # Grok API Key
 GROK_API_URL=${GROK_API_URL:-https://api.x.ai/v1/chat/completions}  # Grok API URL
+SECRET_KEY=${SECRET_KEY:-}  # Application secret key
 WEBHOOK_SECRET=${WEBHOOK_SECRET:-}  # Shared secret for signing webhooks
 DEFAULT_WEBHOOK_URL=${DEFAULT_WEBHOOK_URL:-}  # Fallback webhook URL
 
@@ -44,6 +45,13 @@ if [ -z "$GROK_API_KEY" ]; then
     read -sp "Enter your Grok API Key (input hidden): " GROK_API_KEY
     echo
     export GROK_API_KEY=$GROK_API_KEY
+fi
+
+# Ask for the application secret key if not provided
+if [ -z "$SECRET_KEY" ]; then
+    read -sp "Enter the application secret key, at least 16 characters (input hidden): " SECRET_KEY
+    echo
+    export SECRET_KEY=$SECRET_KEY
 fi
 
 echo "Building and deploying $STACK_NAME to region $REGION..."
@@ -94,7 +102,7 @@ fi
 
 # Deploy the SAM application
 echo "Deploying the application..."
-PARAMETER_OVERRIDES=("GrokApiKey=$GROK_API_KEY" "GrokApiUrl=$GROK_API_URL")
+PARAMETER_OVERRIDES=("GrokApiKey=$GROK_API_KEY" "GrokApiUrl=$GROK_API_URL" "SecretKey=$SECRET_KEY")
 if [ -n "$WEBHOOK_SECRET" ]; then
     PARAMETER_OVERRIDES+=("WebhookSecret=$WEBHOOK_SECRET")
 fi

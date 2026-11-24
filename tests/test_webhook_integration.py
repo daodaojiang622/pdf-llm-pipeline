@@ -3,6 +3,7 @@
 import importlib
 import json
 import os
+from decimal import Decimal
 import sys
 import types
 import unittest
@@ -112,6 +113,46 @@ class LambdaWorkerTests(unittest.TestCase):
             "private", json.dumps(self.handler.redact_event_for_logging(event))
         )
         self.assertEqual(event["headers"]["X-Webhook-Url"], URL)
+
+    def test_status_serializes_dynamodb_numbers(self):
+        self.handler.jobs_table.get_item.return_value = {
+            "Item": {
+                "job_id": "job-1",
+                "created_at": Decimal("1700000000"),
+                "score": Decimal("1.5"),
+            }
+        }
+        response = self.handler.get_job_status("job-1")
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["created_at"], 1700000000)
+        self.assertEqual(body["score"], 1.5)
+
+    def test_upload_creates_job_before_s3_object(self):
+        order = mock.Mock()
+        order.attach_mock(self.handler.jobs_table.put_item, "put_item")
+        order.attach_mock(self.handler.s3.put_object, "put_object")
+        self.handler.handle_pdf_upload({"body": "pdf", "headers": {}})
+        self.assertEqual(
+            [call[0] for call in order.mock_calls], ["put_item", "put_object"]
+        )
+
+    def test_failed_s3_upload_removes_job(self):
+        self.handler.s3.put_object.side_effect = RuntimeError("s3 down")
+        with self.assertRaises(RuntimeError):
+            self.handler.handle_pdf_upload({"body": "pdf", "headers": {}})
+        self.handler.jobs_table.delete_item.assert_called_once()
+
+    def test_s3_key_is_url_decoded(self):
+        event = s3_event()
+        event["Records"][0]["s3"]["object"]["key"] = "uploads/job-1/my+file%281%29.pdf"
+        with mock.patch.object(self.handler, "notify_job_outcome"):
+            self.handler.handle_s3_event(event, self.context)
+        self.handler.s3.download_file.assert_called_once()
+        self.assertEqual(
+            self.handler.s3.download_file.call_args.args[1],
+            "uploads/job-1/my file(1).pdf",
+        )
 
 
 if __name__ == "__main__":

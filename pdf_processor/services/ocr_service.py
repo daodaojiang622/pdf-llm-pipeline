@@ -1,7 +1,7 @@
 import os
 import json
 import tempfile
-from storage_service import download_to_temp, write_file
+from services.storage_service import download_to_temp, write_file
 
 # MinerU imports
 from magic_pdf.data.data_reader_writer import FileBasedDataWriter, FileBasedDataReader

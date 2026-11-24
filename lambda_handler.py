@@ -1,7 +1,15 @@
 import json
 import os
+import sys
 import base64
+from decimal import Decimal
+from urllib.parse import unquote_plus
+
 import boto3
+
+# The services package lives in pdf_processor/, beside this handler
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pdf_processor'))
+
 from services.ocr_service import extract_text_from_pdf
 from services.summary_service import generate_summary
 from services.storage_service import save_file
@@ -28,6 +36,12 @@ jobs_table = dynamodb.Table(os.environ.get('JOBS_TABLE', 'pdf-processor-jobs'))
 
 # Time reserved after webhook retries so Lambda can exit cleanly
 WEBHOOK_SHUTDOWN_RESERVE_MS = 5000
+
+def json_default(value):
+    """Serialize DynamoDB numbers, which boto3 returns as Decimal."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 def redact_event_for_logging(event):
     """Copy an event without the webhook URL, which may embed a token."""
@@ -176,16 +190,9 @@ def handle_pdf_upload(event):
     file_content = body
     filename = f"{job_id}.pdf"
     
-    # Save to S3
     pdf_key = f"uploads/{job_id}/{filename}"
-    s3.put_object(
-        Bucket=PDF_BUCKET,
-        Key=pdf_key,
-        Body=file_content,
-        ContentType='application/pdf'
-    )
     
-    # Create job record
+    # Create the job first because the S3 upload immediately triggers processing
     job_item = {
         'job_id': job_id,
         'status': 'uploaded',
@@ -197,6 +204,18 @@ def handle_pdf_upload(event):
     if webhook_url:
         job_item['webhook_url'] = webhook_url
     jobs_table.put_item(Item=job_item)
+    
+    # Save to S3
+    try:
+        s3.put_object(
+            Bucket=PDF_BUCKET,
+            Key=pdf_key,
+            Body=file_content,
+            ContentType='application/pdf'
+        )
+    except Exception:
+        jobs_table.delete_item(Key={'job_id': job_id})
+        raise
     
     # Trigger OCR processing (via separate Lambda or this same Lambda if it can complete in time)
     # For this example, we'll return the job ID and assume another process will pick it up
@@ -242,7 +261,7 @@ def get_job_status(job_id):
             'headers': {
                 'Content-Type': 'application/json'
             },
-            'body': json.dumps(job)
+            'body': json.dumps(job, default=json_default)
         }
     except Exception as e:
         return {
@@ -346,7 +365,7 @@ def handle_s3_event(event, context=None):
     # Get bucket and key from event
     record = event['Records'][0]['s3']
     bucket = record['bucket']['name']
-    key = record['object']['key']
+    key = unquote_plus(record['object']['key'])
     
     # Only process if this is a PDF uploaded to the uploads folder
     if not key.startswith('uploads/') or not key.lower().endswith('.pdf'):
