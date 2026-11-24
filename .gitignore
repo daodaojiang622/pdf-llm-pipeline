@@ -157,3 +157,5 @@ cython_debug/
 uploads/
 output_images/
 output/
+# arXiv's license does not allow redistribution; download it with samples/README.md
+samples/arxiv-attention/
