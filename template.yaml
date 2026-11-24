@@ -6,7 +6,7 @@ Description: PDF Processor Application
 Globals:
   Function:
     Timeout: 300  # 5 minutes
-    MemorySize: 1024
+    MemorySize: 3008  # Loading torch and MinerU alone uses about 1 GB
     Environment:
       Variables:
         # Use the name, not !Ref, to avoid a cycle with the S3 trigger

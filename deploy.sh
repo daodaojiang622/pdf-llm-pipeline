@@ -22,6 +22,13 @@ if ! command -v sam &> /dev/null; then
     exit 1
 fi
 
+# The image build needs BuildKit. SAM's legacy builder fails with Docker's containerd image store.
+if ! sam build --help 2>/dev/null | grep -q -- "--use-buildkit"; then
+    echo "This SAM CLI is too old to build with BuildKit. Upgrade it, for example:"
+    echo "  pip install --upgrade aws-sam-cli"
+    exit 1
+fi
+
 if ! command -v aws &> /dev/null; then
     echo "AWS CLI is not installed. Please install it first."
     echo "See: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
@@ -58,7 +65,7 @@ echo "Building and deploying $STACK_NAME to region $REGION..."
 
 # Build the SAM application
 echo "Building the application..."
-sam build --use-container
+sam build --use-buildkit
 
 # Deploy static assets
 if [ -d "static" ]; then
@@ -113,6 +120,7 @@ fi
 sam deploy \
     --stack-name $STACK_NAME \
     --s3-bucket $DEPLOY_BUCKET \
+    --resolve-image-repos \
     --region $REGION \
     --capabilities CAPABILITY_IAM \
     --parameter-overrides "${PARAMETER_OVERRIDES[@]}"
