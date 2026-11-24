@@ -6,6 +6,14 @@ from services.ocr_service import extract_text_from_pdf
 from services.summary_service import generate_summary
 from services.storage_service import save_file, read_file, write_file
 from services.message_service import MessageQueue
+from services.webhook_dispatcher import (
+    EVENT_FAILED,
+    EVENT_SUMMARIZED,
+    WebhookUrlError,
+    notify_job_outcome,
+    validate_webhook_url,
+    without_webhook_url,
+)
 
 # Determine if we're running in AWS Lambda
 is_lambda = 'AWS_LAMBDA_FUNCTION_NAME' in os.environ
@@ -81,7 +89,7 @@ if is_lambda:
         except ClientError as e:
             print(f"Error updating job {job_id}: {e}")
     
-    def create_job(job_id, pdf_path, filename):
+    def create_job(job_id, pdf_path, filename, webhook_url=None):
         """Create job in DynamoDB"""
         import time
         
@@ -93,6 +101,8 @@ if is_lambda:
             'created_at': int(time.time()),
             'updated_at': int(time.time())
         }
+        if webhook_url:
+            item['webhook_url'] = webhook_url
         
         try:
             jobs_table.put_item(Item=item)
@@ -112,7 +122,7 @@ else:
             processing_jobs[job_id]['status'] = status
             processing_jobs[job_id].update(kwargs)
     
-    def create_job(job_id, pdf_path, filename):
+    def create_job(job_id, pdf_path, filename, webhook_url=None):
         """Create job in memory"""
         processing_jobs[job_id] = {
             "status": "uploaded",
@@ -120,6 +130,7 @@ else:
             "filename": filename,
             "text_path": None,
             "summary_path": None,
+            "webhook_url": webhook_url,
         }
 
 # Create message queues
@@ -128,6 +139,20 @@ summary_queue = MessageQueue()
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() == "pdf"
+
+def notify_job(job_id, event_type, summary_path=None, error=None):
+    """Send a job webhook. Failures are logged and never affect the job."""
+    try:
+        job = get_job(job_id) or {}
+        notify_job_outcome(
+            job_id,
+            event_type,
+            webhook_url=job.get("webhook_url"),
+            summary_path=summary_path,
+            error=error,
+        )
+    except Exception as e:
+        print(f"Webhook notification error for job {job_id}: {type(e).__name__}")
 
 @app.route("/")
 def index():
@@ -145,6 +170,14 @@ def upload_file():
         flash("No selected file")
         return redirect(request.url)
         
+    webhook_url = request.form.get("webhookUrl", "").strip() or None
+    if webhook_url:
+        try:
+            validate_webhook_url(webhook_url)
+        except WebhookUrlError as e:
+            flash(f"Invalid webhook URL: {e}")
+            return redirect(url_for("index"))
+
     if file and allowed_file(file.filename):
         # Generate a unique ID for this job
         job_id = str(uuid.uuid4())
@@ -154,7 +187,7 @@ def upload_file():
         pdf_path = save_file(file, app.config["UPLOAD_FOLDER"], f"{job_id}_{filename}")
         
         # Add job to tracking
-        create_job(job_id, pdf_path, filename)
+        create_job(job_id, pdf_path, filename, webhook_url)
         
         # Add to OCR processing queue
         ocr_queue.add_message(
@@ -186,7 +219,7 @@ def api_status(job_id):
     if not job:
         return jsonify({"error": "Job not found"}), 404
         
-    return jsonify(job)
+    return jsonify(without_webhook_url(job))
 
 @app.route("/api/summary/<job_id>")
 def get_summary(job_id):
@@ -247,6 +280,7 @@ def process_ocr_queue():
             except Exception as e:
                 update_job(job_id, "ocr_failed", error=str(e))
                 print(f"OCR processing error: {e}")
+                notify_job(job_id, EVENT_FAILED, error="Text extraction failed")
     
     thread = threading.Thread(target=worker)
     thread.daemon = True
@@ -291,9 +325,11 @@ def process_summary_queue():
                 
                 # Update job status
                 update_job(job_id, "completed", summary_path=summary_path)
+                notify_job(job_id, EVENT_SUMMARIZED, summary_path=summary_path)
             except Exception as e:
                 update_job(job_id, "summarization_failed", error=str(e))
                 print(f"Summarization error: {e}")
+                notify_job(job_id, EVENT_FAILED, error="Summarization failed")
     
     thread = threading.Thread(target=worker)
     thread.daemon = True

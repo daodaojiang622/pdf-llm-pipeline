@@ -5,6 +5,14 @@ import boto3
 from services.ocr_service import extract_text_from_pdf
 from services.summary_service import generate_summary
 from services.storage_service import save_file
+from services.webhook_dispatcher import (
+    EVENT_FAILED,
+    EVENT_SUMMARIZED,
+    WebhookUrlError,
+    notify_job_outcome,
+    validate_webhook_url,
+    without_webhook_url,
+)
 
 # Initialize S3 client
 s3 = boto3.client('s3')
@@ -18,11 +26,50 @@ SUMMARY_BUCKET = os.environ.get('SUMMARY_BUCKET', 'pdf-processor-summaries')
 dynamodb = boto3.resource('dynamodb')
 jobs_table = dynamodb.Table(os.environ.get('JOBS_TABLE', 'pdf-processor-jobs'))
 
+# Time reserved after webhook retries so Lambda can exit cleanly
+WEBHOOK_SHUTDOWN_RESERVE_MS = 5000
+
+def redact_event_for_logging(event):
+    """Copy an event without the webhook URL, which may embed a token."""
+    headers = event.get('headers')
+    if not isinstance(headers, dict):
+        return event
+    redacted = {
+        name: '[REDACTED]' if name.lower() == 'x-webhook-url' else value
+        for name, value in headers.items()
+    }
+    return {**event, 'headers': redacted}
+
+def get_request_webhook_url(event):
+    """Read the optional webhook URL; the request body is the raw PDF."""
+    for name, value in (event.get('headers') or {}).items():
+        if name.lower() == 'x-webhook-url':
+            return value
+    return None
+
+def notify_job(job_id, event_type, context=None, summary_path=None, error=None):
+    """Send a job webhook. Failures are logged and never affect the job."""
+    try:
+        job = jobs_table.get_item(Key={'job_id': job_id}).get('Item') or {}
+        budget_ms = None
+        if context is not None:
+            budget_ms = context.get_remaining_time_in_millis() - WEBHOOK_SHUTDOWN_RESERVE_MS
+        notify_job_outcome(
+            job_id,
+            event_type,
+            webhook_url=job.get('webhook_url'),
+            summary_path=summary_path,
+            error=error,
+            time_budget_ms=budget_ms,
+        )
+    except Exception as e:
+        print(f"Webhook notification error for job {job_id}: {type(e).__name__}")
+
 def lambda_handler(event, context):
     """AWS Lambda handler function for the PDF Processor application."""
     
     # Print the event for debugging
-    print(f"Received event: {json.dumps(event)}")
+    print(f"Received event: {json.dumps(redact_event_for_logging(event))}")
     
     try:
         # Determine the event source and process accordingly
@@ -31,7 +78,7 @@ def lambda_handler(event, context):
             return handle_api_gateway_event(event)
         elif event.get('Records') and event.get('Records')[0].get('s3'):
             # S3 event (file uploaded)
-            return handle_s3_event(event)
+            return handle_s3_event(event, context)
         elif event.get('source') == 'aws.events':
             # CloudWatch scheduled event (for processing queues)
             return process_job_queues()
@@ -95,6 +142,21 @@ def handle_pdf_upload(event):
             })
         }
     
+    webhook_url = get_request_webhook_url(event)
+    if webhook_url:
+        try:
+            validate_webhook_url(webhook_url)
+        except WebhookUrlError as e:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json'
+                },
+                'body': json.dumps({
+                    'error': f'Invalid webhook URL: {e}'
+                })
+            }
+
     # Determine if body is base64 encoded
     is_base64 = event.get('isBase64Encoded', False)
     body = event.get('body')
@@ -124,16 +186,17 @@ def handle_pdf_upload(event):
     )
     
     # Create job record
-    jobs_table.put_item(
-        Item={
-            'job_id': job_id,
-            'status': 'uploaded',
-            'pdf_path': f"s3://{PDF_BUCKET}/{pdf_key}",
-            'filename': filename,
-            'created_at': int(time.time()),
-            'updated_at': int(time.time())
-        }
-    )
+    job_item = {
+        'job_id': job_id,
+        'status': 'uploaded',
+        'pdf_path': f"s3://{PDF_BUCKET}/{pdf_key}",
+        'filename': filename,
+        'created_at': int(time.time()),
+        'updated_at': int(time.time())
+    }
+    if webhook_url:
+        job_item['webhook_url'] = webhook_url
+    jobs_table.put_item(Item=job_item)
     
     # Trigger OCR processing (via separate Lambda or this same Lambda if it can complete in time)
     # For this example, we'll return the job ID and assume another process will pick it up
@@ -172,7 +235,7 @@ def get_job_status(job_id):
                 })
             }
         
-        job = response['Item']
+        job = without_webhook_url(response['Item'])
         
         return {
             'statusCode': 200,
@@ -277,7 +340,7 @@ def get_job_summary(job_id):
             })
         }
 
-def handle_s3_event(event):
+def handle_s3_event(event, context=None):
     """Handle S3 events (file uploaded)"""
     
     # Get bucket and key from event
@@ -391,6 +454,14 @@ def handle_s3_event(event):
             }
         )
         
+        # The summary is saved, so delivery problems cannot change the job
+        notify_job(
+            job_id,
+            EVENT_SUMMARIZED,
+            context=context,
+            summary_path=f"s3://{SUMMARY_BUCKET}/{summary_key}"
+        )
+        
         return {
             'statusCode': 200,
             'body': json.dumps({
@@ -417,6 +488,9 @@ def handle_s3_event(event):
                 ':updated_at': int(time.time())
             }
         )
+        
+        # Keep internal exception details out of the external payload
+        notify_job(job_id, EVENT_FAILED, context=context, error='Document processing failed')
         
         raise e
 

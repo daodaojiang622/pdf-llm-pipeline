@@ -16,6 +16,8 @@ Globals:
         GROK_API_URL: !Ref GrokApiUrl
         GROK_API_KEY: !Ref GrokApiKey
         SECRET_KEY: !Ref SecretKey
+        WEBHOOK_SECRET: !Ref WebhookSecret
+        DEFAULT_WEBHOOK_URL: !Ref DefaultWebhookUrl
 
 Parameters:
   GrokApiUrl:
@@ -33,6 +35,17 @@ Parameters:
     NoEcho: true
     Default: !Sub '${AWS::StackName}-secret-key-${AWS::AccountId}'
     Description: Secret key for the application
+
+  WebhookSecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Shared secret for signing webhooks. Webhooks are not sent when empty.
+
+  DefaultWebhookUrl:
+    Type: String
+    Default: ''
+    Description: HTTPS webhook URL used when a job does not provide one
 
 Resources:
   # Lambda Function

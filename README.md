@@ -14,6 +14,7 @@ This application allows users to upload PDF documents, extract text using OCR, a
 - DynamoDB for storing metadata and processing status
 - Amazon SQS for message queuing
 - AWS Lambda for serverless processing
+- HMAC-signed webhook notifications with automatic retries
 
 ## Project Structure
 
@@ -45,7 +46,8 @@ PDF-PROCESSOR
    │   ├── ocr_service.py     # OCR service for text extraction
    │   ├── summary_service.py # Summary service for text summarization
    │   ├── storage_service.py # Storage service for file handling
-   │   └── message_service.py # Message service for queue handling
+   │   ├── message_service.py # Message service for queue handling
+   │   └── webhook_dispatcher.py # Signed webhook delivery
    ├── detectron2/           # Detectron2 models and configurations
 
 ```
@@ -62,4 +64,61 @@ aws configure
 ```
 chmod +x deploy.sh
 ./deploy.sh
+```
+
+## Webhooks
+
+The application can send a `POST` request when a document finishes processing.
+
+Set `WEBHOOK_SECRET` to enable delivery. Choose the destination in one of these ways:
+
+- Lambda API: send an `X-Webhook-Url` header with `POST /upload`.
+- Flask app: include a `webhookUrl` form field with the upload.
+- Fallback: set `DEFAULT_WEBHOOK_URL`.
+
+URLs must use HTTPS and resolve to a public address. Set `WEBHOOK_ALLOW_PRIVATE_URLS=true` only for local development.
+
+### Payload
+
+```json
+{
+  "eventId": "2f1c7f0e-7c55-5a26-a7f6-0b6f4f9d6f10",
+  "eventType": "document.summarized",
+  "documentId": "b7c9f8f2-1f3e-4f55-9f7a-2a8c6f1f0d11",
+  "completedAt": "2026-01-15T12:30:45.123Z",
+  "summaryUrl": "https://example-bucket.s3.amazonaws.com/summary.txt?X-Amz-Signature=..."
+}
+```
+
+`eventType` is `document.summarized` or `document.failed`. Failed events contain `error` instead of `summaryUrl`. `summaryUrl` is a presigned S3 link that expires after one hour, and it is omitted for local files.
+
+### Headers and verification
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-Webhook-Signature` | `t=<unix_seconds>,v1=<hex_hmac_sha256>` |
+| `X-Idempotency-Key` | Same value as `eventId` |
+| `X-Webhook-Event` | Same value as `eventType` |
+
+The signature is an HMAC-SHA256 of `<t>.<raw_request_body>`. Verify the raw bytes before parsing the JSON, and reject timestamps more than 300 seconds from the current time:
+
+```python
+from services.webhook_dispatcher import verify_webhook_signature
+
+is_valid = verify_webhook_signature(raw_body, signature_header, webhook_secret)
+```
+
+Use `X-Idempotency-Key` to ignore duplicates. It stays the same across retries of a document and event type.
+
+### Retry policy
+
+Each request times out after 5 seconds. Delivery makes up to 5 attempts (1 initial attempt and 4 retries), waiting a random time between 0 and `1000 * 2^attempt` ms between attempts.
+
+Network errors, timeouts, and HTTP `408`, `429`, and `5xx` are retried. Other non-2xx responses, including redirects, fail immediately. Delivery failures are logged and never change the saved job or summary.
+
+## Tests
+
+```
+python3 -m unittest discover -s tests
 ```

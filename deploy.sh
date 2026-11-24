@@ -11,6 +11,8 @@ STATIC_BUCKET=${STATIC_BUCKET:-}  # Bucket for static assets
 CLOUDFRONT_DOMAIN=${CLOUDFRONT_DOMAIN:-}  # CloudFront domain (if any)
 GROK_API_KEY=${GROK_API_KEY:-}  # Grok API Key
 GROK_API_URL=${GROK_API_URL:-https://api.x.ai/v1/chat/completions}  # Grok API URL
+WEBHOOK_SECRET=${WEBHOOK_SECRET:-}  # Shared secret for signing webhooks
+DEFAULT_WEBHOOK_URL=${DEFAULT_WEBHOOK_URL:-}  # Fallback webhook URL
 
 # Validate requirements
 if ! command -v sam &> /dev/null; then
@@ -92,14 +94,20 @@ fi
 
 # Deploy the SAM application
 echo "Deploying the application..."
+PARAMETER_OVERRIDES=("GrokApiKey=$GROK_API_KEY" "GrokApiUrl=$GROK_API_URL")
+if [ -n "$WEBHOOK_SECRET" ]; then
+    PARAMETER_OVERRIDES+=("WebhookSecret=$WEBHOOK_SECRET")
+fi
+if [ -n "$DEFAULT_WEBHOOK_URL" ]; then
+    PARAMETER_OVERRIDES+=("DefaultWebhookUrl=$DEFAULT_WEBHOOK_URL")
+fi
+
 sam deploy \
     --stack-name $STACK_NAME \
     --s3-bucket $DEPLOY_BUCKET \
     --region $REGION \
     --capabilities CAPABILITY_IAM \
-    --parameter-overrides \
-        GrokApiKey=$GROK_API_KEY \
-        GrokApiUrl=$GROK_API_URL
+    --parameter-overrides "${PARAMETER_OVERRIDES[@]}"
 
 echo "Deployment complete!"
 
