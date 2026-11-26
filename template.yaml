@@ -14,6 +14,9 @@ Globals:
         TEXT_BUCKET: !Ref TextBucket
         SUMMARY_BUCKET: !Ref SummaryBucket
         JOBS_TABLE: !Ref JobsTable
+        LLM_PROVIDER: !Ref LlmProvider
+        GEMINI_API_KEY: !Ref GeminiApiKey
+        GEMINI_MODEL: !Ref GeminiModel
         GROK_API_URL: !Ref GrokApiUrl
         GROK_API_KEY: !Ref GrokApiKey
         SECRET_KEY: !Ref SecretKey
@@ -21,6 +24,23 @@ Globals:
         DEFAULT_WEBHOOK_URL: !Ref DefaultWebhookUrl
 
 Parameters:
+  LlmProvider:
+    Type: String
+    Default: gemini
+    AllowedValues: [gemini, grok]
+    Description: LLM used for summaries
+
+  GeminiApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: API key for Google Gemini (required when LlmProvider is gemini)
+
+  GeminiModel:
+    Type: String
+    Default: gemini-flash-lite-latest
+    Description: Gemini model ID
+
   GrokApiUrl:
     Type: String
     Default: https://api.x.ai/v1/chat/completions
@@ -29,7 +49,8 @@ Parameters:
   GrokApiKey:
     Type: String
     NoEcho: true
-    Description: API Key for Grok
+    Default: ''
+    Description: API key for Grok (required when LlmProvider is grok)
   
   SecretKey:
     Type: String

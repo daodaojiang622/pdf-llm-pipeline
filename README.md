@@ -1,12 +1,12 @@
 # PDF Processor Application
 
-This application allows users to upload PDF documents, extract text using OCR, and generate summaries using the Grok X AI API.
+This application allows users to upload PDF documents, extract text using OCR, and generate summaries using an LLM (Google Gemini by default, or xAI Grok).
 
 ## Features
 
 - PDF document upload
 - Text extraction using OCR (Magic_pdf / MinerU)
-- Text summarization using Grok X AI API
+- Text summarization using Google Gemini or xAI Grok, chosen with `LLM_PROVIDER`
 - Simple web interface for uploading and viewing results
 - Asynchronous processing with a message queue system
 - Amazon S3 storage for documents, extracted text, and summaries

@@ -9,6 +9,9 @@ REGION=${AWS_REGION:-us-west-2}
 DEPLOY_BUCKET=${DEPLOY_BUCKET:-}  # Bucket for SAM deployment artifacts
 STATIC_BUCKET=${STATIC_BUCKET:-}  # Bucket for static assets
 CLOUDFRONT_DOMAIN=${CLOUDFRONT_DOMAIN:-}  # CloudFront domain (if any)
+LLM_PROVIDER=${LLM_PROVIDER:-gemini}  # gemini or grok
+GEMINI_API_KEY=${GEMINI_API_KEY:-}  # Gemini API Key
+GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}  # Gemini model ID
 GROK_API_KEY=${GROK_API_KEY:-}  # Grok API Key
 GROK_API_URL=${GROK_API_URL:-https://api.x.ai/v1/chat/completions}  # Grok API URL
 SECRET_KEY=${SECRET_KEY:-}  # Application secret key
@@ -47,8 +50,12 @@ if [ -z "$STATIC_BUCKET" ]; then
     export STATIC_BUCKET=$STATIC_BUCKET
 fi
 
-# Ask for Grok API Key if not provided
-if [ -z "$GROK_API_KEY" ]; then
+# Ask for the selected LLM provider's API key if not provided
+if [ "$LLM_PROVIDER" = "gemini" ] && [ -z "$GEMINI_API_KEY" ]; then
+    read -sp "Enter your Gemini API Key (input hidden): " GEMINI_API_KEY
+    echo
+    export GEMINI_API_KEY=$GEMINI_API_KEY
+elif [ "$LLM_PROVIDER" = "grok" ] && [ -z "$GROK_API_KEY" ]; then
     read -sp "Enter your Grok API Key (input hidden): " GROK_API_KEY
     echo
     export GROK_API_KEY=$GROK_API_KEY
@@ -109,7 +116,13 @@ fi
 
 # Deploy the SAM application
 echo "Deploying the application..."
-PARAMETER_OVERRIDES=("GrokApiKey=$GROK_API_KEY" "GrokApiUrl=$GROK_API_URL" "SecretKey=$SECRET_KEY")
+PARAMETER_OVERRIDES=("LlmProvider=$LLM_PROVIDER" "GeminiModel=$GEMINI_MODEL" "GrokApiUrl=$GROK_API_URL" "SecretKey=$SECRET_KEY")
+if [ -n "$GEMINI_API_KEY" ]; then
+    PARAMETER_OVERRIDES+=("GeminiApiKey=$GEMINI_API_KEY")
+fi
+if [ -n "$GROK_API_KEY" ]; then
+    PARAMETER_OVERRIDES+=("GrokApiKey=$GROK_API_KEY")
+fi
 if [ -n "$WEBHOOK_SECRET" ]; then
     PARAMETER_OVERRIDES+=("WebhookSecret=$WEBHOOK_SECRET")
 fi
