@@ -14,6 +14,8 @@ Globals:
         TEXT_BUCKET: !Ref TextBucket
         SUMMARY_BUCKET: !Ref SummaryBucket
         JOBS_TABLE: !Ref JobsTable
+        # Formula recognition is slow on CPU; enable it for math-heavy documents
+        MINERU_FORMULA_ENABLE: 'false'
         LLM_PROVIDER: !Ref LlmProvider
         GEMINI_API_KEY: !Ref GeminiApiKey
         GEMINI_MODEL: !Ref GeminiModel

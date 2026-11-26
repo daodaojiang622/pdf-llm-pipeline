@@ -3,6 +3,11 @@ import json
 import tempfile
 from services.storage_service import download_to_temp, write_file
 
+# PaddleOCR reads its weights from ~/.paddleocr, so point HOME at the directory
+# baked into the image. This must run before MinerU (and PaddleOCR) are imported.
+if os.environ.get("MINERU_HOME"):
+    os.environ["HOME"] = os.environ["MINERU_HOME"]
+
 # MinerU imports
 from magic_pdf.data.data_reader_writer import FileBasedDataWriter, FileBasedDataReader
 from magic_pdf.data.dataset import PymuDocDataset
@@ -15,6 +20,11 @@ MIN_EXTRACTED_CHARS = 20
 
 class ExtractionError(Exception):
     """The PDF could not be read or contained no extractable text."""
+
+
+def _formula_enabled():
+    """Formula recognition is slow on CPU, so it is off unless MINERU_FORMULA_ENABLE=true."""
+    return os.environ.get("MINERU_FORMULA_ENABLE", "false").lower() == "true"
 
 
 def extract_text_from_pdf(pdf_path):
@@ -75,23 +85,20 @@ def _extract_text(pdf_path):
             ds = PymuDocDataset(pdf_bytes)
             
             # Process based on PDF type
+            formula_enable = _formula_enabled()
             if ds.classify() == SupportedPdfParseMethod.OCR:
                 print("Using OCR mode for this PDF")
-                infer_result = ds.apply(doc_analyze, ocr=True)
+                infer_result = ds.apply(
+                    doc_analyze, ocr=True, formula_enable=formula_enable
+                )
                 pipe_result = infer_result.pipe_ocr_mode(image_writer)
             else:
                 print("Using text extraction mode for this PDF")
-                infer_result = ds.apply(doc_analyze, ocr=False)
+                infer_result = ds.apply(
+                    doc_analyze, ocr=False, formula_enable=formula_enable
+                )
                 pipe_result = infer_result.pipe_txt_mode(image_writer)
-            
-            # Generate and save output files
-            model_pdf_path = os.path.join(local_md_dir, f"{document_id}_model.pdf")
-            layout_pdf_path = os.path.join(local_md_dir, f"{document_id}_layout.pdf")
-            spans_pdf_path = os.path.join(local_md_dir, f"{document_id}_spans.pdf")
-            infer_result.draw_model(model_pdf_path)
-            pipe_result.draw_layout(layout_pdf_path)
-            pipe_result.draw_span(spans_pdf_path)
-            
+
             # Get markdown content
             md_content = pipe_result.get_markdown(image_dir)
             

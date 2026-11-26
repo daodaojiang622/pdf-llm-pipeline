@@ -28,11 +28,11 @@ PDF-PROCESSOR
 ├── template.yml             # AWS SAM template for Lambda deployment
 ├── update_templates.py       # Script to update HTML templates
 ├── update_static_to_s3.py    # Script to update static files to S3
+├── mineru/                   # MinerU config and build-time model download
 ├── pdf-processor/
    ├── __init__.py
    ├── app.py                 # Main application file
    ├── config.py              # Configuration settings
-   ├── download_models.hf.py # Script to download models from Hugging Face
    ├── static/
    │   ├── css/
    │   │   └── style.css      # CSS styles for the web interface
@@ -65,6 +65,16 @@ aws configure
 chmod +x deploy.sh
 ./deploy.sh
 ```
+
+## Text extraction
+
+MinerU (`magic-pdf` 1.2.2) extracts text, and runs OCR on scanned pages. If MinerU fails, PyMuPDF reads the embedded text layer instead. A job fails when neither returns usable text.
+
+The Docker build downloads the models into `/opt/mineru`, because Lambda can only write to `/tmp`. Model revisions are pinned in [mineru/download_models.py](mineru/download_models.py), and the configuration is in [mineru/magic-pdf.json](mineru/magic-pdf.json). The build also runs OCR on a scanned sample, and fails if no text comes back.
+
+Formula recognition is slow on CPU, so it is off by default. Set `MINERU_FORMULA_ENABLE=true` to turn it on. Table recognition is disabled, and its models are not in the image.
+
+Outside the image, MinerU has no configuration, so local runs use the PyMuPDF fallback.
 
 ## Webhooks
 

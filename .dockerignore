@@ -1,0 +1,10 @@
+# Secrets must never be baked into the image
+.env
+.env.*
+!.env.example
+
+.git
+.aws-sam
+**/__pycache__
+**/.DS_Store
+samples/arxiv-attention

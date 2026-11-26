@@ -87,6 +87,13 @@ class ExtractionTests(unittest.TestCase):
                     self.ocr.extract_text_from_pdf(sample("generated", name))
                 self.assertIn("Could not read the PDF", str(caught.exception))
 
+    def test_formula_recognition_is_off_by_default(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("MINERU_FORMULA_ENABLE", None)
+            self.assertFalse(self.ocr._formula_enabled())
+            os.environ["MINERU_FORMULA_ENABLE"] = "true"
+            self.assertTrue(self.ocr._formula_enabled())
+
     def test_nearly_empty_text_raises(self):
         with mock.patch.object(self.ocr, "_extract_text", return_value="  \n 12 \n "):
             with self.assertRaises(self.ocr.ExtractionError):

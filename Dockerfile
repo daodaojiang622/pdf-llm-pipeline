@@ -50,7 +50,9 @@ RUN pip install --upgrade pip
 # torchtext is imported by unimernet (used by magic-pdf); 0.18.0 matches torch 2.3.
 RUN pip install torch==2.3.1 torchvision==0.18.1 torchtext==0.18.0 --index-url https://download.pytorch.org/whl/cpu
 
-# Clone and build decord with the compatible FFmpeg
+# Clone and build decord with the compatible FFmpeg. The editable install loads
+# from its source directory, so build in /opt: Lambda mounts an empty /tmp at runtime.
+WORKDIR /opt
 RUN git clone --recursive https://github.com/dmlc/decord && \
     cd decord && \
     git checkout v0.6.0 && \
@@ -60,23 +62,18 @@ RUN git clone --recursive https://github.com/dmlc/decord && \
     cd ../python && \
     pip install -e .
 
-COPY . /var/task/
-RUN echo "Listing /var/task after COPY:" && ls -R /var/task/
-
-# Copy function code
-COPY . ${LAMBDA_TASK_ROOT}/
-
 # Define environment vars for simsimd build to disable SVE
 ENV SIMSIMD_TARGET_SVE=0 \
     SIMSIMD_TARGET_SVE_F16=0 \
     SIMSIMD_TARGET_SVE_BF16=0 \
     SIMSIMD_TARGET_SVE2=0
 
-# Try to install dependencies with modified approach
-RUN pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt || \
+# Install dependencies before copying the code, so code changes reuse these layers
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt || \
     (echo "Error installing all requirements, trying with simsimd excluded..." && \
-     grep -v "simsimd" ${LAMBDA_TASK_ROOT}/requirements.txt > ${LAMBDA_TASK_ROOT}/filtered-requirements.txt && \
-     pip install -r ${LAMBDA_TASK_ROOT}/filtered-requirements.txt && \
+     grep -v "simsimd" /tmp/requirements.txt > /tmp/filtered-requirements.txt && \
+     pip install -r /tmp/filtered-requirements.txt && \
      echo "Attempting simsimd installation separately..." && \
      CFLAGS="-DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0" pip install simsimd || \
      echo "WARNING: simsimd package was not installed")
@@ -89,6 +86,28 @@ RUN yum install -y gcc10 gcc10-c++ which && yum clean all && \
     CC=gcc10-gcc CXX=gcc10-g++ pip install --no-build-isolation \
         "git+https://github.com/facebookresearch/detectron2.git@247691a1c292654867deb35cabb27f18d75a1363" && \
     python -c "import detectron2._C"
+
+# MinerU models and config. Lambda can only write to /tmp, so everything MinerU
+# would download on first use is stored in the image here.
+ENV MINERU_TOOLS_CONFIG_JSON=/opt/mineru/magic-pdf.json \
+    MINERU_HOME=/opt/mineru/home \
+    YOLO_CONFIG_DIR=/tmp/Ultralytics \
+    MPLCONFIGDIR=/tmp/matplotlib
+COPY mineru/ /opt/mineru/
+RUN python /opt/mineru/download_models.py
+
+# Run OCR once so PaddleOCR stores its weights under MINERU_HOME. This also fails
+# the build if MinerU cannot read a scanned PDF. Hugging Face is offline from here.
+ENV HF_HUB_OFFLINE=1
+COPY samples/generated/scanned-fw9-p1-3.pdf /opt/mineru/warmup.pdf
+RUN mkdir -p "$MINERU_HOME" && \
+    HOME="$MINERU_HOME" python /opt/mineru/warmup.py /opt/mineru/warmup.pdf && \
+    ls "$MINERU_HOME/.paddleocr/whl" && \
+    rm -rf /opt/mineru/warmup.pdf /tmp/* && \
+    chmod -R a+rX /opt/mineru
+
+# Copy function code last
+COPY . ${LAMBDA_TASK_ROOT}/
 
 # Set the Lambda handler
 CMD [ "lambda_handler.lambda_handler" ]
